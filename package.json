@@ -1,0 +1,20 @@
+{
+  "name": "strait",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 43117 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "test": "tsx tests/sim-check.ts",
+    "smoke": "node tests/ui-smoke.mjs",
+    "preview": "vite preview --host 127.0.0.1 --port 43117 --strictPort"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.18.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.3",
+    "vite-plugin-singlefile": "^2.0.3"
+  }
+}
