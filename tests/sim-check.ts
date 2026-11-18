@@ -253,6 +253,7 @@ function reportFixture(partial: Partial<Report> & Pick<Report, "id">): Report {
     kind: "security",
     claimedCount: 1,
     text: "fixture report",
+    damageReport: false,
     truth: {
       realEventIds: ["e1"],
       fabricated: false,

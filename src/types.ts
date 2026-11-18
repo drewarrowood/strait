@@ -4,6 +4,83 @@ export type Source = "jmic" | "ukmto" | "state" | "press" | "anon" | "liaison";
 
 export type IncidentKind = "mine" | "harassment" | "security" | "gnss" | "congestion" | "pipeline";
 
+/** Hidden class of a hit. The desk sees evidence, not this label, until the debrief. */
+export type WeaponClass = "mine" | "drone" | "missile";
+
+export type WeaponCall = WeaponClass | "unknown";
+
+export type CallConfidence = "low" | "medium" | "high";
+
+export type BreachHeight = "below" | "above" | "unknown";
+
+/** Why a cable does not identify one class. `height` is the aft-low case. */
+export type DamageAmbiguity = "none" | "height" | "class";
+
+export type ShipCondition = "total_loss" | "disabled" | "under_tow" | "proceed_slow";
+
+export type CasualtyRisk = "low" | "elevated" | "high";
+
+export type DamageCompartment =
+  | "forepeak"
+  | "forward-hold"
+  | "midships"
+  | "engine-room"
+  | "steering-gear"
+  | "hull-side"
+  | "superstructure"
+  | "bridge";
+
+export type Settling = "none" | "stern" | "bow";
+
+/** What one cable actually commits to. Flags the prose does not assert stay false. */
+export interface EvidenceReport {
+  stage: "early" | "full";
+  heightOfBreach: BreachHeight;
+  ambiguity: DamageAmbiguity;
+  compartmentOnly: boolean;
+  compartment: DamageCompartment | null;
+  flooding: boolean;
+  list: boolean;
+  settling: Settling;
+  keelDamage: boolean;
+  fire: boolean;
+  smoke: boolean;
+  holeAboveWaterline: boolean;
+  superstructureDamage: boolean;
+  bridgeDamage: boolean;
+  localizedImpact: boolean;
+  heavyBlast: boolean;
+  /** Observational prose. It does not name a weapon. */
+  text: string;
+}
+
+/** True physical outcome of one damaging hit, plus the cables the desk may see. */
+export interface DamageAssessment {
+  weapon: WeaponClass;
+  flooding: boolean;
+  list: boolean;
+  settling: Settling;
+  keelDamage: boolean;
+  fire: boolean;
+  smoke: boolean;
+  holeAboveWaterline: boolean;
+  superstructureDamage: boolean;
+  bridgeDamage: boolean;
+  localizedImpact: boolean;
+  heavyBlast: boolean;
+  compartment: DamageCompartment;
+  condition: ShipCondition;
+  casualtyRisk: CasualtyRisk;
+  early: EvidenceReport;
+  full: EvidenceReport;
+}
+
+export interface WeaponTag {
+  eventId: string;
+  call: WeaponCall;
+  confidence: CallConfidence;
+}
+
 export type Guidance = "sail" | "caution" | "defer";
 
 export type PublicMessage = "reassure" | "factual" | "warn" | "silent";
@@ -47,6 +124,11 @@ export interface TrueEvent {
   escorted: boolean;
   convoySize: number;
   summary: string;
+  /**
+   * Present only when a mine or security hit damaged a hull.
+   * `weapon` is the hidden class. Morning views must not copy it.
+   */
+  damage?: DamageAssessment;
 }
 
 export interface ReportTruth {
@@ -73,6 +155,8 @@ export interface Report {
   kind: IncidentKind;
   claimedCount: number;
   text: string;
+  /** True when `text` is a damage cable and the desk must not be shown a weapon label. */
+  damageReport: boolean;
   truth: ReportTruth;
 }
 
@@ -184,6 +268,7 @@ export interface PublicReport {
   kind: IncidentKind;
   claimedCount: number;
   text: string;
+  damageReport: boolean;
 }
 
 export interface PublicProgrammeEvent {
@@ -197,6 +282,9 @@ export interface PublicProgrammeEvent {
   escorted: boolean;
   convoySize: number;
   summary: string;
+  /** Set when this log line is a damage cable. The label must not name a weapon. */
+  damageReport: boolean;
+  condition?: ShipCondition;
 }
 
 export interface PublicRelease {
@@ -224,6 +312,22 @@ export interface HistoryDay {
   yanbuFlowMb: number;
 }
 
+/** A hit the desk can see on this morning. No weapon class. */
+export interface PublicDamageCase {
+  eventId: string;
+  day: number;
+  zone: Zone;
+  programme: boolean;
+  /** Best cable available on this morning. */
+  text: string;
+  stage: "early" | "full";
+  condition: ShipCondition;
+  casualtyRisk: CasualtyRisk;
+  shipsDamaged: number;
+  casualties: number;
+  missing: number;
+}
+
 export interface Morning {
   day: number;
   /** Last player morning is 31: the books after day 30, with no further plan. */
@@ -236,6 +340,7 @@ export interface Morning {
   reports: PublicReport[];
   newReports: PublicReport[];
   programmeEvents: PublicProgrammeEvent[];
+  damageCases: PublicDamageCase[];
   history: HistoryDay[];
   yesterday: HistoryDay | null;
 }

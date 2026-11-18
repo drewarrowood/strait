@@ -143,6 +143,7 @@ img, svg { max-width: 100%; }
 .warn { background: var(--rust-bg); border-color: #e4b2a6; }
 
 .report { border-left: 4px solid var(--line); }
+.damage { border-left: 4px solid var(--sea); }
 .report header { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; justify-content: space-between; }
 .badge {
   display: inline-block;
@@ -234,7 +235,7 @@ th { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: 
   margin: 0 0 12px;
 }
 .lede { font-size: 18px; max-width: 62ch; }
-.facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 18px 0; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 18px 0; }
 .facts article { background: var(--paper); border-top: 3px solid var(--sea); padding: 10px 12px; }
 .facts h2 { font-family: var(--serif); font-size: 18px; margin: 0 0 6px; }
 .scorehead { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; justify-content: space-between; }

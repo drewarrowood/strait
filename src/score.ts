@@ -1,4 +1,5 @@
 import { CONFIG } from "./config";
+import { gradeDamageCalls, type DamageGrade } from "./damage";
 import { BASELINE } from "./decide";
 import { judgmentWord, oneDecimal, whole } from "./format";
 import { dayLabel, zoneName } from "./labels";
@@ -6,7 +7,7 @@ import { simulate, summarize, utilityOf, type CampaignTotals } from "./model";
 import { tryResolve } from "./questions";
 import { bandOf } from "./project";
 import { clamp } from "./rng";
-import type { Decisions, ForecastAnswer, ForecastQuestion, LedgerMark, Report, TrueEvent, World } from "./types";
+import type { Decisions, ForecastAnswer, ForecastQuestion, LedgerMark, Report, TrueEvent, WeaponTag, World } from "./types";
 
 export interface Mistake {
   id: string;
@@ -45,6 +46,7 @@ export interface Scorecard {
   logScore: number | null;
   forecastPoints: number;
   ledger: LedgerScore;
+  damage: DamageGrade;
   operationalPoints: number;
   judgment: number;
   judgmentLabel: string;
@@ -74,6 +76,7 @@ export function buildScorecard(
   marks: Readonly<Record<string, LedgerMark>>,
   forecasts: readonly ForecastAnswer[],
   samples = CONFIG.replaySamples,
+  weaponTags: Readonly<Record<string, WeaponTag>> = {},
 ): Scorecard {
   const resolved = forecasts.map((answer) => {
     const outcome = tryResolve(answer.question, world);
@@ -91,10 +94,12 @@ export function buildScorecard(
     : null;
   const forecastPoints = brier == null ? 0 : clamp(1 - brier / CONFIG.brierReference, 0, 1) * 100;
   const ledger = gradeLedger(world, marks);
+  const damage = gradeDamageCalls(world.events, world.reports, weaponTags, CONFIG.days + 1);
   const replay = replayPolicies(world.seed, decisions, samples);
   const operationalPoints = operationalScore(replay.playerUtility, replay.baselineUtility);
-  const w = CONFIG.scoreWeights;
-  const judgment = w.forecast * forecastPoints + w.ledger * ledger.points + w.operational * operationalPoints;
+  const w = judgmentWeights(damage.points != null);
+  const judgment =
+    w.forecast * forecastPoints + w.ledger * ledger.points + w.operational * operationalPoints + w.damage * (damage.points ?? 0);
   const actual = summarize(world);
   const actualUtility = utilityOf(actual);
   const mistakes = detectMistakes(world, decisions, marks, resolved);
@@ -103,6 +108,7 @@ export function buildScorecard(
     logScore,
     forecastPoints,
     ledger,
+    damage,
     operationalPoints,
     judgment,
     judgmentLabel: judgmentWord(judgment),
@@ -418,6 +424,24 @@ function replayPolicies(campaignSeed: string, decisions: readonly Decisions[], s
     baselineCasualties,
     playerStrait,
     baselineStrait,
+  };
+}
+
+/** Weights actually used. A month with no damage cable spreads that weight across the other three. */
+export function judgmentWeights(damageScored: boolean): {
+  forecast: number;
+  ledger: number;
+  operational: number;
+  damage: number;
+} {
+  const w = CONFIG.scoreWeights;
+  if (damageScored) return { ...w };
+  const rest = w.forecast + w.ledger + w.operational;
+  return {
+    forecast: w.forecast / rest,
+    ledger: w.ledger / rest,
+    operational: w.operational / rest,
+    damage: 0,
   };
 }
 

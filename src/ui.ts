@@ -1,5 +1,6 @@
 import { calibrationChart, histogram, postureChart, sparkline } from "./charts";
 import { CONFIG } from "./config";
+import { callLabel, conditionShort, playerCable, weaponLabel } from "./damage";
 import { BASELINE, describePlan, reserveEscorts, reserveMcm, sanitizeDecision } from "./decide";
 import { bandText, escapeHtml, judgmentWord, oneDecimal, percent, pressureWord, whole } from "./format";
 import { KIND_LABEL, SOURCE_HINT, SOURCE_LABEL, ZONE_LABEL, allegedLabel, zoneName } from "./labels";
@@ -9,17 +10,21 @@ import { presentMorning } from "./present";
 import { projectPlan, type Projection } from "./project";
 import { questionForMorning, tryResolve } from "./questions";
 import { quantile } from "./rng";
-import type { Scorecard } from "./score";
+import { judgmentWeights, type Scorecard } from "./score";
 import type {
+  CallConfidence,
   Decisions,
   ForecastAnswer,
   Guidance,
   LedgerMark,
   Morning,
+  PublicDamageCase,
   PublicMessage,
   PublicProgrammeEvent,
   PublicReport,
   Source,
+  WeaponCall,
+  WeaponTag,
   Zone,
 } from "./types";
 
@@ -34,6 +39,7 @@ export interface AppState {
   decisions: Decisions[];
   draft: Decisions;
   ledger: Record<string, LedgerMark>;
+  weaponTags: Record<string, WeaponTag>;
   answers: ForecastAnswer[];
   forecastDraft: number;
   forecastTouched: boolean;
@@ -61,7 +67,7 @@ const TUTORIAL = [
   },
   {
     title: "The inbox is not the sea.",
-    body: "You will get trade alerts that are fast and unconfirmed, liaison notes that are usually straight, a joint-centre bulletin that closes before it is published, state-affiliated claims that run high or invent a story, anonymous quotes, and press copy that repeats someone else. Some press lines are running totals — a week’s figure written as if it were today. For each report, confirm it, hold it, exclude it, or merge it with the same incident. Hold is a real answer. A missing report is not proof that nothing happened.",
+    body: "You will get trade alerts that are fast and unconfirmed, liaison notes that are usually straight, a joint-centre bulletin that closes before it is published, state-affiliated claims that run high or invent a story, anonymous quotes, and press copy that repeats someone else. Some press lines are running totals — a week’s figure written as if it were today. For each report, confirm it, hold it, exclude it, or merge it with the same incident. Hold is a real answer. A missing report is not proof that nothing happened. When a ship is hit, the damage cable describes flooding, fire, and where the hull failed. It does not name a weapon. Tag the class you infer, or mark it unknown.",
   },
   {
     title: "You are graded on judgment.",
@@ -96,7 +102,7 @@ function startScreen(app: AppState): string {
     <div class="facts">
       <article><h2>Routes</h2><p>Strait, Fujairah, Yanbu. Southbound from Yanbu still has to pass Bab al-Mandab.</p></article>
       <article><h2>Reports</h2><p>Confirm, hold, exclude, or merge. A running total is not a daily count.</p></article>
-      <article><h2>Score</h2><p>Probabilities, a ledger, and a replay that separates luck from the policy.</p></article>
+      <article><h2>Score</h2><p>Probabilities, a ledger, damage cables, and a replay that separates luck from the policy.</p></article>
     </div>
     <div class="card">
       <label class="field" for="seed">Shared seed <span class="help">Leave blank for a new month. Any text is a valid seed.</span>
@@ -182,7 +188,7 @@ function brief(app: AppState, live: Morning, viewed: Morning, world: ReturnType<
   const morning = looking ? viewed : live;
   const coach =
     !looking && live.day === 1
-      ? `<section class="card coach"><h2>First morning</h2><p>Read the contested reports before you move ships. The day a report was filed is not always the day it happened. A figure that “has reached” a number is often a running total. The joint centre will not be in your inbox every morning. A quiet programme cable means your ships reported nothing. It does not mean the theatre was quiet.</p></section>`
+      ? `<section class="card coach"><h2>First morning</h2><p>Read the contested reports before you move ships. The day a report was filed is not always the day it happened. A figure that “has reached” a number is often a running total. The joint centre will not be in your inbox every morning. A quiet programme cable means your ships reported nothing. It does not mean the theatre was quiet. A damage cable says what was seen after a hit. It does not name a weapon.</p></section>`
       : "";
   const release = morning.newRelease
     ? `<section class="card"><h2>Official release</h2><p>Average Strait flow for days ${morning.newRelease.fromDay}–${morning.newRelease.toDay}: <strong>${oneDecimal(morning.newRelease.printedMbPerDay)} mb/d</strong>. Theatre total, rounded, with measurement error. Not your programme cable.</p></section>`
@@ -215,7 +221,7 @@ function brief(app: AppState, live: Morning, viewed: Morning, world: ReturnType<
   const closing = live.finalMorning && !looking
     ? `<section class="card warn"><h2>The month is over</h2><p>Anything filed overnight is in the book. You can still correct the ledger. Then open the debrief. It will show the hidden log, your probabilities, and what your decisions do on other seeds.</p></section>`
     : "";
-  return `${coach}${closing}${notes}${release}${resolutionCard}<section class="card"><h2>Contested reports overnight</h2>${list}</section>`;
+  return `${coach}${closing}${notes}${release}${resolutionCard}${damageBoard(app, morning, looking)}<section class="card"><h2>Contested reports overnight</h2>${list}</section>`;
 }
 
 function ledger(app: AppState, live: Morning): string {
@@ -264,7 +270,7 @@ function reportCard(report: PublicReport, app: AppState, live: Morning): string 
     <header>
       <div><span class="badge ${report.source}">${SOURCE_LABEL[report.source]}</span>
         <strong>${escapeHtml(report.id)}</strong>
-        <span class="quiet">${KIND_LABEL[report.kind]}</span></div>
+        <span class="quiet">${report.damageReport ? "Damage report" : KIND_LABEL[report.kind]}</span></div>
       <div class="claim" aria-label="Claimed figure">${report.claimedCount}</div>
     </header>
     <p class="help">Filed ${escapeHtml(allegedLabel(report.filedDay))} · alleges ${escapeHtml(allegedLabel(report.allegedDay))} · ${escapeHtml(zoneName(report.zone))}</p>
@@ -435,11 +441,12 @@ function debriefScreen(app: AppState): string {
       <h1>${escapeHtml(card.judgmentLabel)}</h1>
       <p><span class="kicker">Judgment score</span><br><strong>${whole(card.judgment)}</strong></p>
     </div>
-    <p class="help">Weighted ${Math.round(CONFIG.scoreWeights.forecast * 100)}% forecasts, ${Math.round(CONFIG.scoreWeights.ledger * 100)}% ledger, ${Math.round(CONFIG.scoreWeights.operational * 100)}% the mean outcome of these decisions across seeds. This is a grade of the record, not a model prediction.</p>
+    <p class="help">${escapeHtml(weightLine(card))} This is a grade of the record, not a model prediction.</p>
     <div class="facts">
       <article><h2>Forecasts</h2><p><strong>${whole(card.forecastPoints)}</strong> / 100</p><p>Brier ${card.brier == null ? "—" : card.brier.toFixed(3)} (lower is better; 0.25 is a constant 50%). Log score ${card.logScore == null ? "—" : card.logScore.toFixed(3)} (closer to zero is better).</p></article>
       <article><h2>Ledger</h2><p><strong>${whole(card.ledger.points)}</strong> / 100</p><p>${card.ledger.accuracy == null ? "No graded calls. Abstention is a 40, and it is not a pass." : `${card.ledger.right} right, ${card.ledger.wrong} wrong, ${card.ledger.abstain} held.`} Accuracy is only over the calls you actually made.</p></article>
       <article><h2>Operations</h2><p><strong>${whole(card.operationalPoints)}</strong> / 100</p><p>60 is matching the steady baseline’s mean utility. The mean, not the median, so a fat tail of casualties counts.</p></article>
+      <article><h2>Damage cables</h2><p><strong>${card.damage.points == null ? "—" : whole(card.damage.points)}</strong> / 100</p><p>${escapeHtml(damageBlurb(card))}</p></article>
     </div>
     <section class="card">
       <h2>Luck and judgment</h2>
@@ -485,6 +492,7 @@ function debriefScreen(app: AppState): string {
           : `<p>None of the bookkeeping failures this exercise tracks turned up. Read the comparison before you treat that as a clean bill. A right number reached by counting a running total would have been named above.</p>`
       }
     </section>
+    ${damageDebrief(card)}
     <section class="card">
       <h2>Forecasts</h2>
       ${calibrationChart(
@@ -541,7 +549,7 @@ function trueLog(world: ReturnType<typeof simulate>, marks: Record<string, Ledge
       const events = world.events.filter((event) => event.day === day);
       const reports = world.reports.filter((report) => report.allegedDay === day);
       return `<div class="log-day"><h3>${escapeHtml(allegedLabel(day))}</h3>
-        <ul>${events.map((event) => `<li>${escapeHtml(event.summary)}</li>`).join("") || "<li>No event logged.</li>"}</ul>
+        <ul>${events.map((event) => `<li>${escapeHtml(hiddenEventLine(event))}</li>`).join("") || "<li>No event logged.</li>"}</ul>
         ${
           reports.length
             ? `<ul>${reports
@@ -565,6 +573,7 @@ function rulesDialog(app: AppState): string {
     <h2 id="rules-title">How a day works</h2>
     <p>Read the direct return and the new reports. Update the ledger. Set the plan. If there is a question, give a probability. Commit. The next morning shows what your own ships reported, plus whatever claims arrived. It does not show the true theatre totals.</p>
     <p>Confirm means “book this as separate incidents,” and you set how many. Merge means “this is the same incident as a programme-log entry or another report.” Exclude means “not a real separate incident.” Hold means “I am not calling it.”</p>
+    <p>When a ship is hit, the damage cable says what was seen: flooding, fire, where the hull failed, and whether the ship can still move. It does not name a weapon. Tag mine, one-way drone, missile, or unknown. Unknown is not penalized when the cable leaves the height of the breach unresolved.</p>
     <p>Official flow questions resolve when the release prints. Questions about true incident counts stay sealed until the debrief, because the truth is not in the inbox. The plan’s bands use the published parameters and a prior on posture. They do not look at this seed.</p>
     <p>Illustrative throughout. Not a forecast, not operational advice, and not a way to plan harm.</p>
     <button class="btn btn-primary" type="button" data-action="rules-close">Close</button>
@@ -677,7 +686,115 @@ function mergeOptions(selfId: string, morning: Morning, selected: string | undef
 
 function programmeLabel(event: PublicProgrammeEvent): string {
   const when = event.day >= 1 ? `day ${event.day}` : allegedLabel(event.day);
+  if (event.damageReport) {
+    const state = event.condition ? conditionShort(event.condition) : "hull damage";
+    return `${when} · ${ZONE_LABEL[event.zone]} · hull damage · ${state}`;
+  }
   return `${when} · ${ZONE_LABEL[event.zone]} · ${KIND_LABEL[event.kind]} · damaged ${event.shipsDamaged}`;
+}
+
+function damageBoard(app: AppState, morning: Morning, looking: boolean): string {
+  if (morning.damageCases.length === 0) return "";
+  const note = looking
+    ? "Reading an earlier morning. The cables below are what you had then. Tags stay on today’s book."
+    : "These cables say what was observed after a hit. They do not name a weapon. Tag the class the evidence supports. Unknown is not penalized when the height of the breach is unresolved, or when an above-waterline cable does not separate the classes.";
+  return `<section class="card"><h2>Damage cables</h2><p class="help">${note}</p></section>${morning.damageCases
+    .map((item) => damageCard(item, app.weaponTags[item.eventId], looking))
+    .join("")}`;
+}
+
+function damageCard(item: PublicDamageCase, tag: WeaponTag | undefined, looking: boolean): string {
+  const call = tag?.call ?? "unknown";
+  const confidence = tag?.confidence ?? "medium";
+  const when = item.day >= 1 ? `Day ${item.day}` : allegedLabel(item.day);
+  const place = item.programme ? zoneName(item.zone) : "other traffic";
+  const stage = item.stage === "full" ? "Follow-up survey is in." : "Initial report. A fuller survey may follow.";
+  const controls = looking
+    ? `<p class="help">On the book: ${escapeHtml(callLabel(call))}${call === "unknown" ? "" : `, ${confidence} confidence`}.</p>`
+    : `${callButtons(item.eventId, call)}${call === "unknown" ? "" : confidenceButtons(item.eventId, confidence)}`;
+  return `<article class="card damage">
+    <header><div><strong>${escapeHtml(item.eventId)}</strong> <span class="quiet">${escapeHtml(when)} · ${escapeHtml(place)} · ${escapeHtml(conditionShort(item.condition))}</span></div></header>
+    <p>${escapeHtml(item.text)}</p>
+    <p class="help">${stage}</p>
+    ${controls}
+  </article>`;
+}
+
+function callButtons(eventId: string, call: WeaponCall): string {
+  const options: Array<[WeaponCall, string]> = [
+    ["mine", "Mine"],
+    ["drone", "One-way drone"],
+    ["missile", "Missile"],
+    ["unknown", "Unknown"],
+  ];
+  return `<div class="actions" role="group" aria-label="Suspected weapon for ${escapeHtml(eventId)}">${options
+    .map(
+      ([value, label]) =>
+        `<button type="button" data-action="weapon-call" data-event="${escapeHtml(eventId)}" data-call="${value}" aria-pressed="${call === value}">${label}</button>`,
+    )
+    .join("")}</div>`;
+}
+
+function confidenceButtons(eventId: string, confidence: CallConfidence): string {
+  const options: Array<[CallConfidence, string]> = [
+    ["low", "Low confidence"],
+    ["medium", "Medium"],
+    ["high", "High confidence"],
+  ];
+  return `<div class="actions" role="group" aria-label="Confidence for ${escapeHtml(eventId)}">${options
+    .map(
+      ([value, label]) =>
+        `<button type="button" data-action="weapon-confidence" data-event="${escapeHtml(eventId)}" data-confidence="${value}" aria-pressed="${confidence === value}">${label}</button>`,
+    )
+    .join("")}</div><p class="help">A correct call scores more when you are sure. A wrong call costs more when you are sure.</p>`;
+}
+
+function weightLine(card: Scorecard): string {
+  const weights = judgmentWeights(card.damage.points != null);
+  const pct = (n: number) => `${Math.round(n * 100)}%`;
+  const damage =
+    weights.damage > 0 ? `, ${pct(weights.damage)} damage cables` : ". No damage cable was shown, so that weight was spread across the other three";
+  return `Weighted ${pct(weights.forecast)} forecasts, ${pct(weights.ledger)} ledger, ${pct(weights.operational)} the mean outcome of these decisions across seeds${damage}.`;
+}
+
+function damageBlurb(card: Scorecard): string {
+  const grade = card.damage;
+  if (grade.points == null) return "No hit was shown to the desk, so this weight was redistributed.";
+  return `${grade.correct} right, ${grade.wrong} wrong, ${grade.unknown} unknown. Unknown is not penalized when the cable was ambiguous. A confident wrong call costs more than a hesitant one.`;
+}
+
+function damageDebrief(card: Scorecard): string {
+  const grade = card.damage;
+  if (grade.rows.length === 0) {
+    return `<section class="card"><h2>Damage cables</h2><p>No damaging hit was shown to the desk. There is nothing to grade, and that part of the weight was spread across the other scores.</p></section>`;
+  }
+  const rows = grade.rows
+    .map((row) => {
+      const gradeClass = row.call === "unknown" ? "abstain" : row.call === row.weapon ? "right" : "wrong";
+      const yours = `${callLabel(row.call)}${row.confidence ? ` · ${row.confidence}` : ""}`;
+      return `<tr><td><code>${escapeHtml(row.eventId)}</code></td><td>${escapeHtml(yours)}</td><td>${escapeHtml(weaponLabel(row.weapon))}</td><td class="${gradeClass}">${escapeHtml(row.note)}</td></tr>`;
+    })
+    .join("");
+  const cables = grade.rows
+    .map((row) => `<p><code>${escapeHtml(row.eventId)}</code> ${escapeHtml(row.evidence)}</p>`)
+    .join("");
+  return `<section class="card"><h2>Damage cables</h2><p>${escapeHtml(damageBlurb(card))}</p><p class="help">A mine signature sits below the waterline: flooding, list, settling by the bow or stern, sometimes keel damage, and often no fire. A drone or a missile sits above it: fire, smoke, a hole above the waterline, or damage to the superstructure or the bridge. The engine room and the steering gear are aft and low. If the cable cannot place the height of that breach, both stay plausible, and unknown is not penalized.</p>
+    <table>
+      <caption>Your weapon call beside the hidden class.</caption>
+      <thead><tr><th>Hit</th><th>Your call</th><th>True class</th><th>Score</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <details><summary>Cables you were shown</summary>${cables}</details>
+  </section>`;
+}
+
+function hiddenEventLine(event: ReturnType<typeof simulate>["events"][number]): string {
+  if (!event.damage) return event.summary;
+  const cable = playerCable(event.damage, event.damage.full, {
+    casualties: event.casualties,
+    missing: event.missing,
+  });
+  return `${cable} True weapon: ${weaponLabel(event.damage.weapon)}.`;
 }
 
 function labelDisposition(item: LedgerMark["disposition"]): string {
