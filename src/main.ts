@@ -1,11 +1,22 @@
 import { CONFIG } from "./config";
+import { sanitizeWeaponTags } from "./damage";
 import { BASELINE, cloneDecision, describePlan, reserveEscorts, reserveMcm, sanitizeDecision } from "./decide";
 import { presentMorning } from "./present";
 import { questionForMorning } from "./questions";
 import { simulate } from "./model";
 import { buildScorecard } from "./score";
 import { clamp, clampInt } from "./rng";
-import type { ConvoySize, Decisions, Disposition, Guidance, PublicMessage, Source, Zone } from "./types";
+import type {
+  CallConfidence,
+  ConvoySize,
+  Decisions,
+  Disposition,
+  Guidance,
+  PublicMessage,
+  Source,
+  WeaponCall,
+  Zone,
+} from "./types";
 import { planReadout, render, type AppState, type Phase } from "./ui";
 import "./style.css";
 
@@ -19,6 +30,7 @@ const app: AppState = {
   decisions: [],
   draft: cloneDecision(BASELINE),
   ledger: {},
+  weaponTags: {},
   answers: [],
   forecastDraft: 50,
   forecastTouched: false,
@@ -84,6 +96,8 @@ function onClick(event: Event): void {
   else if (action === "commit") commit();
   else if (action === "debrief") openDebrief();
   else if (action === "ledger-set") setDisposition(actionEl.dataset.report ?? "", actionEl.dataset.disposition as Disposition);
+  else if (action === "weapon-call") setWeaponCall(actionEl.dataset.event ?? "", actionEl.dataset.call as WeaponCall);
+  else if (action === "weapon-confidence") setWeaponConfidence(actionEl.dataset.event ?? "", actionEl.dataset.confidence as CallConfidence);
   else if (action === "filter") {
     const mode = actionEl.dataset.mode;
     if (mode === "open" || mode === "new" || mode === "all") app.ledgerMode = mode;
@@ -194,6 +208,7 @@ function startCampaign(seed: string, tutorial: boolean): void {
   app.decisions = [];
   app.draft = cloneDecision(BASELINE);
   app.ledger = {};
+  app.weaponTags = {};
   app.answers = [];
   app.forecastDraft = 50;
   app.forecastTouched = false;
@@ -226,6 +241,7 @@ function resume(): void {
   app.decisions = saved.decisions.map((decision) => sanitizeDecision(decision));
   app.draft = sanitizeDecision(saved.draft ?? app.decisions[app.decisions.length - 1] ?? BASELINE);
   app.ledger = saved.ledger ?? {};
+  app.weaponTags = sanitizeWeaponTags(saved.weaponTags);
   app.answers = Array.isArray(saved.answers) ? saved.answers : [];
   app.phase = saved.phase ?? "brief";
   app.forecastDraft = saved.forecastDraft ?? 50;
@@ -275,11 +291,34 @@ function openDebrief(): void {
   draw();
   window.setTimeout(() => {
     const world = simulate(app.seed, app.decisions);
-    app.scorecard = buildScorecard(world, app.decisions, app.ledger, app.answers);
+    app.scorecard = buildScorecard(world, app.decisions, app.ledger, app.answers, CONFIG.replaySamples, app.weaponTags);
     app.scoring = false;
     save();
     draw();
   }, 30);
+}
+
+function setWeaponCall(eventId: string, call: WeaponCall): void {
+  if (!eventId) return;
+  if (call !== "mine" && call !== "drone" && call !== "missile" && call !== "unknown") return;
+  const prev = app.weaponTags[eventId];
+  app.weaponTags[eventId] = {
+    eventId,
+    call,
+    confidence: call === "unknown" ? "medium" : (prev?.confidence ?? "medium"),
+  };
+  save();
+  draw();
+}
+
+function setWeaponConfidence(eventId: string, confidence: CallConfidence): void {
+  if (!eventId) return;
+  if (confidence !== "low" && confidence !== "medium" && confidence !== "high") return;
+  const prev = app.weaponTags[eventId];
+  if (!prev || prev.call === "unknown") return;
+  app.weaponTags[eventId] = { eventId, call: prev.call, confidence };
+  save();
+  draw();
 }
 
 function setDisposition(id: string, disposition: Disposition): void {
@@ -409,6 +448,7 @@ interface SaveFile {
   decisions: Decisions[];
   draft: Decisions;
   ledger: AppState["ledger"];
+  weaponTags?: AppState["weaponTags"];
   answers: AppState["answers"];
   phase: Phase;
   forecastDraft: number;
@@ -425,6 +465,7 @@ function save(): void {
     decisions: app.decisions,
     draft: app.draft,
     ledger: app.ledger,
+    weaponTags: app.weaponTags,
     answers: app.answers,
     phase: app.phase,
     forecastDraft: app.forecastDraft,

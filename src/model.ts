@@ -1,4 +1,13 @@
 import { CONFIG } from "./config";
+import {
+  assessHit,
+  damageDispatch,
+  damageRestatement,
+  damagingKind,
+  playerCable,
+  recoveryFor,
+  stageFor,
+} from "./damage";
 import { BASELINE, guidanceLabel, messageLabel, sanitizeDecision } from "./decide";
 import { oneDecimal } from "./format";
 import { zoneName } from "./labels";
@@ -288,6 +297,8 @@ function runDay(
   state.backlog -= programmeShips;
 
   const dayEvents: TrueEvent[] = [];
+  let straitSlowMb = 0;
+  let straitAnchorReturns = 0;
   const programmeLane = runLane({
     seed,
     state,
@@ -303,7 +314,10 @@ function runDay(
     exciteMult,
   });
   dayEvents.push(...programmeLane.events);
-  state.backlog += programmeLane.returned;
+  const programmeRecovery = recoveryFor(programmeLane.events);
+  state.backlog += programmeLane.returned + programmeRecovery.anchorReturns;
+  straitSlowMb = programmeRecovery.flowBackMb;
+  straitAnchorReturns = programmeRecovery.anchorReturns;
 
   const bgRng = rngFor(seed, `background|${day}`);
   const bgMean = CONFIG.backgroundMean * CONFIG.backgroundFactor[decision.guidance];
@@ -364,8 +378,9 @@ function runDay(
     exciteMult,
   });
   dayEvents.push(...fujLane.events, ...omanBgLane.events);
+  const fujRecovery = recoveryFor(fujLane.events);
   const fujLost = (fujLane.damaged + fujLane.returned) * CONFIG.shipMb;
-  const fujFlow = Math.max(0, fuj - fujLost);
+  const fujFlow = Math.max(0, fuj - fujLost + Math.min(fujRecovery.flowBackMb, fujLost));
 
   const babRng = rngFor(seed, `bab-ships|${day}`);
   const southShips = fractionalShips(babRng, (yanbu * decision.yanbuSouthShare) / CONFIG.shipMb);
@@ -386,6 +401,7 @@ function runDay(
     exciteMult,
   });
   dayEvents.push(...babLane.events);
+  const babRecovery = recoveryFor(babLane.events);
   const babLost = (babLane.damaged + babLane.returned) * CONFIG.shipMb;
 
   const suezRng = rngFor(seed, `suez|${day}`);
@@ -397,7 +413,10 @@ function runDay(
     suezSlip = northMb * CONFIG.suezSlipFraction;
     state.suezQueue = suezSlip;
   }
-  const yanbuFlow = Math.max(0, yanbu - babLost - suezSlip + releasedQueue);
+  const yanbuFlow = Math.max(
+    0,
+    yanbu - babLost - suezSlip + releasedQueue + Math.min(babRecovery.flowBackMb, babLost),
+  );
 
   if (fujStarted) {
     dayEvents.push(outageEvent(state, day, "oman", Math.max(0, decision.fujairahMb - fujFlow), "Fujairah"));
@@ -439,8 +458,9 @@ function runDay(
     state.excitation + threatEvents.length * CONFIG.excitePerEvent,
   );
 
-  const programmeFlow = programmeLane.arrived * CONFIG.shipMb;
-  const backgroundFlow = backgroundLane.arrived * CONFIG.shipMb;
+  const backgroundRecovery = recoveryFor(backgroundLane.events);
+  const programmeFlow = programmeLane.arrived * CONFIG.shipMb + straitSlowMb;
+  const backgroundFlow = backgroundLane.arrived * CONFIG.shipMb + backgroundRecovery.flowBackMb;
   const straitFlow = programmeFlow + backgroundFlow;
   const systemFlow = straitFlow + fujFlow + yanbuFlow;
 
@@ -521,6 +541,11 @@ function runDay(
     suezSlip,
     backlog: state.backlog,
     shutInShips,
+    straitSlowMb,
+    straitAnchorReturns,
+    fujSlowMb: Math.min(fujRecovery.flowBackMb, fujLost),
+    babSlowMb: Math.min(babRecovery.flowBackMb, babLost),
+    damageCables: dayEvents.some((event) => event.programme && event.damage != null),
   });
 
   if (day >= 1) {
@@ -763,7 +788,7 @@ function transitEvent(
     summary += ` Crew casualties: ${harm.casualties}.`;
     if (harm.missing > 0) summary += ` Of those, missing: ${harm.missing}.`;
   } else summary += " Crew accounted for.";
-  return makeEvent(opts.state, {
+  const event = makeEvent(opts.state, {
     day: opts.day,
     zone: opts.zone,
     kind,
@@ -777,6 +802,14 @@ function transitEvent(
     convoySize: convoy,
     summary,
   });
+  if (damaged > 0 && damagingKind(kind)) {
+    event.damage = assessHit(opts.seed, event.id, kind);
+    event.summary = playerCable(event.damage, event.damage.early, {
+      casualties: harm.casualties,
+      missing: harm.missing,
+    });
+  }
+  return event;
 }
 
 function casualtyDraw(rng: Rng, damaged: number, casP: number): { casualties: number; missing: number } {
@@ -856,6 +889,7 @@ function fileReports(seed: string, state: Internal, world: World, day: number, e
           variant: Math.floor(runRng() * 3),
           windowDays: 7,
         }),
+        damageReport: false,
         truth: {
           realEventIds: inWindow.map((event) => event.id),
           fabricated: false,
@@ -907,6 +941,30 @@ function buildReport(
   const latency = late ? CONFIG.reports.lateLatency : CONFIG.reports.minLatency;
   const filedDay = clampFile(event.day + latency);
   const id = takeReportId(state);
+  const variant = Math.floor(rng() * 3);
+  const damage = event.damage;
+  const crew = source === "liaison" ? { casualties: event.casualties, missing: event.missing } : null;
+  const text = damage
+    ? damageDispatch({
+        source,
+        zone,
+        claimed,
+        allegedDay: event.day,
+        late,
+        variant,
+        cable: playerCable(damage, stageFor(event.day, filedDay) === "full" ? damage.full : damage.early, crew),
+      })
+    : reportText({
+        source,
+        kind,
+        zone,
+        claimed,
+        allegedDay: event.day,
+        late,
+        runningTotal: false,
+        casualties: source === "liaison" ? event.casualties : 0,
+        variant,
+      });
   return {
     id,
     filedDay,
@@ -915,17 +973,8 @@ function buildReport(
     zone,
     kind,
     claimedCount: claimed,
-    text: reportText({
-      source,
-      kind,
-      zone,
-      claimed,
-      allegedDay: event.day,
-      late,
-      runningTotal: false,
-      casualties: source === "liaison" ? event.casualties : 0,
-      variant: Math.floor(rng() * 3),
-    }),
+    text,
+    damageReport: damage != null,
     truth: {
       realEventIds: [event.id],
       fabricated: false,
@@ -948,6 +997,7 @@ function restatement(state: Internal, original: Report, rng: Rng): Report {
     mislocated = true;
   }
   const id = takeReportId(state);
+  const variant = Math.floor(rng() * 3);
   return {
     id,
     filedDay: clampFile(original.filedDay + (rng() < 0.7 ? 0 : 1)),
@@ -956,17 +1006,20 @@ function restatement(state: Internal, original: Report, rng: Rng): Report {
     zone,
     kind: original.kind,
     claimedCount: original.claimedCount,
-    text: reportText({
-      source: "press",
-      kind: original.kind,
-      zone,
-      claimed: original.claimedCount,
-      allegedDay: original.allegedDay,
-      late: false,
-      runningTotal: false,
-      casualties: 0,
-      variant: Math.floor(rng() * 3),
-    }),
+    damageReport: original.damageReport,
+    text: original.damageReport
+      ? damageRestatement(original.text, variant)
+      : reportText({
+          source: "press",
+          kind: original.kind,
+          zone,
+          claimed: original.claimedCount,
+          allegedDay: original.allegedDay,
+          late: false,
+          runningTotal: false,
+          casualties: 0,
+          variant,
+        }),
     truth: {
       realEventIds: [...original.truth.realEventIds],
       fabricated: original.truth.fabricated,
@@ -997,6 +1050,7 @@ function fabrication(state: Internal, day: number, source: "state" | "anon", rng
     zone,
     kind,
     claimedCount: claimed,
+    damageReport: false,
     text: reportText({
       source,
       kind,
@@ -1045,6 +1099,29 @@ function fileRelease(seed: string, state: Internal, world: World, day: number, f
       const late = filedDay - event.day > 3;
       const reportRng = rngFor(seed, `jmic-text|${event.id}`);
       const id = takeReportId(state);
+      const variant = Math.floor(reportRng() * 3);
+      const damage = event.damage;
+      const text = damage
+        ? damageDispatch({
+            source: "jmic",
+            zone: event.zone,
+            claimed: 1,
+            allegedDay: event.day,
+            late,
+            variant,
+            cable: playerCable(damage, stageFor(event.day, filedDay) === "full" ? damage.full : damage.early, null),
+          })
+        : reportText({
+            source: "jmic",
+            kind: event.kind,
+            zone: event.zone,
+            claimed: 1,
+            allegedDay: event.day,
+            late,
+            runningTotal: false,
+            casualties: 0,
+            variant,
+          });
       world.reports.push({
         id,
         filedDay,
@@ -1053,17 +1130,8 @@ function fileRelease(seed: string, state: Internal, world: World, day: number, f
         zone: event.zone,
         kind: event.kind,
         claimedCount: 1,
-        text: reportText({
-          source: "jmic",
-          kind: event.kind,
-          zone: event.zone,
-          claimed: 1,
-          allegedDay: event.day,
-          late,
-          runningTotal: false,
-          casualties: 0,
-          variant: Math.floor(reportRng() * 3),
-        }),
+        damageReport: damage != null,
+        text,
         truth: {
           realEventIds: [event.id],
           fabricated: false,
@@ -1112,39 +1180,58 @@ function operatorNotes(input: {
   suezSlip: number;
   backlog: number;
   shutInShips: number;
+  straitSlowMb: number;
+  straitAnchorReturns: number;
+  fujSlowMb: number;
+  babSlowMb: number;
+  damageCables: boolean;
 }): string[] {
   const notes: string[] = [];
   const crew =
     input.casualties > 0
       ? `Crew casualties on programme ships: ${input.casualties}${input.missing > 0 ? `, of which missing ${input.missing}` : ""}.`
       : "No crew casualties on programme ships.";
+  const cable = input.damageCables
+    ? " Hull damage is in the damage cable. It describes what was seen and does not name a weapon."
+    : "";
   notes.push(
-    `Programme Strait call: ${input.programmeShips} sailed (${input.escortedWant} escorted, ${input.unescortedGo} unescorted). Arrived ${input.arrived}, returned to anchor ${input.returned}, hulls damaged ${input.damaged}. ${crew}`,
+    `Programme Strait call: ${input.programmeShips} sailed (${input.escortedWant} escorted, ${input.unescortedGo} unescorted). Arrived ${input.arrived}, returned to anchor ${input.returned}, hulls damaged ${input.damaged}. ${crew}${cable}`,
   );
+  const slow =
+    input.straitSlowMb > 0
+      ? ` Includes ${oneDecimal(input.straitSlowMb)} mb from damaged ships that could proceed slowly.`
+      : "";
   notes.push(
-    `Oil your programme got through the Strait: ${oneDecimal(input.programmeFlow)} mb. That is not the theatre total. Other ships sail this lane and do not cable you.`,
+    `Oil your programme got through the Strait: ${oneDecimal(input.programmeFlow)} mb.${slow} That is not the theatre total. Other ships sail this lane and do not cable you.`,
   );
+  const fujSlow = input.fujSlowMb > 0 ? ` ${oneDecimal(input.fujSlowMb)} mb of that moved on a ship that could proceed slowly.` : "";
   notes.push(
-    input.fujOutage
+    (input.fujOutage
       ? `Fujairah line accepted ${oneDecimal(input.fujFlow)} mb of ${oneDecimal(input.fujAsked)} mb nominated. The operator reports a station outage. Cause not established. No crew casualty is carried for the outage.`
-      : `Fujairah line accepted ${oneDecimal(input.fujFlow)} mb of ${oneDecimal(input.fujAsked)} mb nominated.`,
+      : `Fujairah line accepted ${oneDecimal(input.fujFlow)} mb of ${oneDecimal(input.fujAsked)} mb nominated.`) + fujSlow,
   );
   const bab =
     input.southShips > 0
       ? ` Southbound loadings: ${input.southShips}. Bab damage ${input.babDamaged}, Bab turn-backs ${input.babReturned}.`
       : " No southbound Yanbu loading today, so nothing of yours passed Bab al-Mandab.";
+  const babSlow = input.babSlowMb > 0 ? ` ${oneDecimal(input.babSlowMb)} mb still moved on a ship that could proceed slowly.` : "";
   const suez = input.suezSlip > 0.05 ? ` Northbound cargo of ${oneDecimal(input.suezSlip)} mb slipped a day on the Suez queue.` : "";
   notes.push(
     (input.yanbuOutage
       ? `Yanbu line accepted ${oneDecimal(input.yanbuFlow)} mb against a nomination of ${oneDecimal(input.yanbuAsked)} mb, restricted by a station outage.`
       : `Yanbu line moved ${oneDecimal(input.yanbuFlow)} mb (nomination ${oneDecimal(input.yanbuAsked)} mb).`) +
       bab +
+      babSlow +
       suez,
   );
+  const towed =
+    input.straitAnchorReturns > 0
+      ? ` ${input.straitAnchorReturns} damaged programme ship${input.straitAnchorReturns === 1 ? " is" : "s are"} back at anchor, disabled or under tow.`
+      : "";
   notes.push(
     input.shutInShips > 0
-      ? `Ships at anchor after the day's movements: ${input.backlog}. The anchorage is full, so ${input.shutInShips} loadings were shut in and did not move.`
-      : `Ships at anchor after the day's movements: ${input.backlog}.`,
+      ? `Ships at anchor after the day's movements: ${input.backlog}. The anchorage is full, so ${input.shutInShips} loadings were shut in and did not move.${towed}`
+      : `Ships at anchor after the day's movements: ${input.backlog}.${towed}`,
   );
   notes.push(
     `Public line you issued: ${messageLabel(input.decision.message)}. Guidance you gave owners: ${guidanceLabel(input.decision.guidance)}. A quiet programme cable is not a quiet theatre.`,

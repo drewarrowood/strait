@@ -14,7 +14,7 @@ A turn is one day. The campaign is 30 days, then a debrief.
 
 Each morning you can read four things:
 
-- **Brief.** What your own ships reported yesterday, whether a pipeline accepted what you nominated, and which contested claims arrived overnight. A quiet programme cable means your ships reported nothing. It does not mean the sea was quiet.
+- **Brief.** What your own ships reported yesterday, whether a pipeline accepted what you nominated, and which contested claims arrived overnight. A quiet programme cable means your ships reported nothing. It does not mean the sea was quiet. When a ship is hit, a damage cable describes what was seen — flooding, list, fire, smoke, where the hull failed — and does not name a weapon. An early cable can be incomplete. A fuller survey follows. Tag the class you infer (mine, one-way attack drone, or anti-ship missile) or mark it unknown. The engine room and the steering gear are aft and low: a cable that cannot place the height of that breach does not identify the weapon.
 - **Ledger.** For each contested report: **confirm** (and say how many separate incidents you are booking), **hold**, **exclude**, or **merge** it with a programme-log entry or another report. Hold is an allowed answer. Untouched reports are abstentions.
 - **Plan.** Escorts (six ships; unused ones cover nobody), convoy size, sweepers (three, and they work slowly), how many programme tankers you call toward the Strait, Fujairah and Yanbu nominations, and what share of Yanbu cargo sails south. Southbound Yanbu cargo must pass Bab al-Mandab. Northbound cargo goes via Suez and does not. Guidance changes whether owners will sail unescorted. The public line moves the illustrative price index, and a reassurance followed by damage costs you politically.
 - **Forecast.** On some mornings you must give a probability before the day will commit. Flow questions resolve when the joint release prints. Questions about true incident counts stay sealed until the debrief, because that count is not in your inbox.
@@ -37,6 +37,7 @@ The plan never shows a bare point estimate. Every model outcome is a **median an
 - **Forecasts.** Brier score and log score. Lower Brier is better. A constant 50% scores 0.25 on Brier. Skill is measured against that.
 - **Ledger.** Only calls you actually make. Confirming a running total as a daily count, merging two claims that truly happened in different places, excluding the only trace of a real background incident, and booking one incident twice are wrong. Matching a duplicate to the original is right.
 - **Operations.** Your decision sequence is replayed on 80 seeds and compared with a steady baseline on those same seeds. The grade uses the **mean** utility, so a fat tail of casualties counts even when the median looks acceptable. Matching the baseline is 60. Beating it moves you up.
+- **Damage cables.** Correct weapon calls score up, and a confident correct call scores more than a hesitant one. A wrong call scores down, and a confident wrong call costs more. Unknown scores zero — it is not penalized — when the cable was genuinely ambiguous. A hit also changes what the ship can do: a total loss is gone, a disabled ship or a ship under tow comes back to anchor, and a ship that can proceed slowly still moves part of its cargo. Crew casualty risk is on the cable; realized casualties still move pressure and the utility.
 
 The debrief names bookkeeping failures in plain words, including counting a running total as a daily count, shelving a probability after one quiet bulletin, merging claims from different places, and treating a missing report as proof that nothing happened. It also shows the hidden event log beside the call you made.
 
@@ -51,7 +52,7 @@ npm run dev
 
 Open [http://127.0.0.1:43117](http://127.0.0.1:43117).
 
-The simulation check (many seeds, sane ranges, overdispersion, determinism, and the bookkeeping phrases):
+The simulation check (many seeds, sane ranges, overdispersion, determinism, and the bookkeeping phrases) and the damage-signature unit tests:
 
 ```bash
 npm test

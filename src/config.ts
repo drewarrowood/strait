@@ -258,10 +258,60 @@ export const CONFIG = {
   /** How many fresh seeds the same decisions are replayed on. */
   replaySamples: 80,
 
+  // --- Damage signatures ---------------------------------------------------
+  // A damaging mine or security hit produces a cable the desk can see.
+  // Mines are generated below the waterline. Drones and missiles are generated
+  // above it. An engine-room or steering-gear cable that never places the
+  // height of the breach stays ambiguous on purpose. The probabilities below
+  // are noise and timing. They cannot turn a mine into an above-waterline-only
+  // signature; that constraint is in the generator, not in these rates.
+  damage: {
+    /** Share of damaging security hits whose hidden class is a one-way drone. The rest are missiles. */
+    droneGivenSecurity: 0.45,
+    /** Chance an aft-low hit is described only by compartment, hiding breach height. */
+    compartmentOnlyP: 0.74,
+    /** Chance that compartment-only reading is still all the later survey can say. */
+    compartmentOnlyStaysP: 0.6,
+    /** Mornings after the hit before the fuller survey is in the cable. */
+    fullLatency: 2,
+    /** Share of a proceed-slow ship's cargo that still moves that day. */
+    slowDeliveryFraction: 0.5,
+    /** Chance an early cable keeps each true observation. The later survey keeps them. */
+    earlyKeepP: 0.62,
+    mineFloodP: 0.9,
+    mineListP: 0.72,
+    mineSettleP: 0.68,
+    mineKeelP: 0.24,
+    mineKeelMidP: 0.5,
+    /** Mines sometimes burn, and often do not. A fire never stands as the only signature. */
+    mineFireP: 0.12,
+    aboveFireP: 0.8,
+    /** Drones and missiles flood sometimes, and usually not much. */
+    aboveFloodP: 0.18,
+    /** Cumulative-free weights. The remainder of each triple is "can proceed slowly". */
+    mineSevere: { total: 0.48, disabled: 0.32, tow: 0.15 },
+    mineOther: { total: 0.22, disabled: 0.36, tow: 0.24 },
+    aboveMachinery: { total: 0.18, disabled: 0.4, tow: 0.24 },
+    aboveOther: { total: 0.06, disabled: 0.18, tow: 0.22 },
+    /**
+     * Per-call raw points. Averaged, then scaled from the worst miss to the best call.
+     * Unknown on genuinely ambiguous evidence is zero: not a penalty, not a reward.
+     */
+    scoreCorrectLow: 0.5,
+    scoreCorrectMedium: 0.85,
+    scoreCorrectHigh: 1.15,
+    scoreWrongLow: -0.55,
+    scoreWrongMedium: -1,
+    scoreWrongHigh: -1.45,
+    scoreUnknownAmbiguous: 0,
+    scoreUnknownClear: -0.3,
+  },
+
   // --- Judgment score ------------------------------------------------------
   // Weights sum to 1. The operational part uses mean utility across replays,
   // so a fat tail of casualties counts even when the median looks acceptable.
-  scoreWeights: { forecast: 0.4, ledger: 0.3, operational: 0.3 },
+  // If a month shows no damage cable, the damage weight is redistributed.
+  scoreWeights: { forecast: 0.34, ledger: 0.26, operational: 0.25, damage: 0.15 },
   /** Brier score of a forecaster who always says 50%. Skill is measured against this. */
   brierReference: 0.25,
   /** Log score clamps probabilities into this open interval so a 0 or 1 cannot explode. */
